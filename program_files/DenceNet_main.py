@@ -8,7 +8,6 @@ from visualization import plot_training_curves, save_results, plot_confusion_mat
 from Config import Config
 
 def main():
-    print("DenseNet医療画像分類プログラム開始")
     
     # 設定
     config = Config()
