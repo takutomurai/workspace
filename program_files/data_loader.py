@@ -174,7 +174,9 @@ class PatientImageDataset(Dataset):
 
 def create_transform(image_dir):
     """画像変換を作成"""
-    max_width, max_height = get_max_image_size(image_dir)
+    #max_width, max_height = get_max_image_size(image_dir)
+    max_width = 183
+    max_height = 431
     print(f"最大画像サイズ: {max_width} x {max_height}")
     
     transform = transforms.Compose([

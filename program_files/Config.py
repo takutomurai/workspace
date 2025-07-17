@@ -16,7 +16,7 @@ class Config:
         self.num_classes = 2
         
         # 学習設定
-        self.num_epochs = 100
+        self.num_epochs = 50
         self.batch_size = 128
         self.learning_rate = 0.00001
         self.test_size = 0.2
