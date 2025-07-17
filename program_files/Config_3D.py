@@ -20,8 +20,8 @@ class Config:
         self.model_type = 'densenet3d'  # 'densenet3d' or 'simple_3dcnn'
         self.num_classes = 2
         self.learning_rate = 0.01
-        self.num_epochs = 50
-        self.batch_size = 8  # DenseNet3Dはメモリを多く使うのでさらに小さく
+        self.num_epochs = 1
+        self.batch_size = 32  # DenseNet3Dはメモリを多く使うのでさらに小さく
         self.test_size = 0.2
         
         # DenseNet3D構造設定
