@@ -67,29 +67,30 @@ def run_cross_validation(config, id_to_image, labels, available_months):
             config.num_epochs, config.device
         )
         
-        # 最良モデルでの評価
+        # 最良モデル（学習中で最高アキュラシーを達成したモデル）でテストデータを評価
         model.load_state_dict(best_model_info['model_state'])
         final_metrics = evaluate_model(model, test_loader, config.device)
         
-        # フォールドごとのモデル保存
+        # フォールドごとのモデル保存（学習中の最良モデルを保存）
         fold_model_info = {
-            'model_state': best_model_info['model_state'],
-            'accuracy': final_metrics['accuracy'],
+            'model_state': best_model_info['model_state'],  # 学習中の最良モデル状態
+            'train_accuracy': best_model_info['accuracy'],   # 学習中の最良アキュラシー
+            'test_accuracy': final_metrics['accuracy'],      # テストデータでの最終評価
             'precision': final_metrics['precision'],
             'recall': final_metrics['recall'],
             'auc': final_metrics['auc'] if not np.isnan(final_metrics['auc']) else 0.0,
-            'epoch': best_model_info['epoch'],
+            'best_epoch': best_model_info['epoch'],          # 最良アキュラシーを達成したエポック
             'model_name': best_model_info['model_name'],
             'fold': fold + 1,
             'final_metrics': final_metrics,
             'training_history': training_history
         }
         
-        # 各フォールドのモデルを保存
+        # 各フォールドの最良モデルを保存
         fold_model_path = save_fold_model(fold_model_info, config.save_dir, fold + 1)
         cv_results['fold_model_paths'].append(fold_model_path)
         
-        # 結果を保存
+        # 結果を保存（テストデータでの最終評価結果）
         cv_results['fold_accuracies'].append(final_metrics['accuracy'])
         cv_results['fold_precisions'].append(final_metrics['precision'])
         cv_results['fold_recalls'].append(final_metrics['recall'])
@@ -97,12 +98,13 @@ def run_cross_validation(config, id_to_image, labels, available_months):
         cv_results['fold_best_epochs'].append(best_model_info['epoch'])
         cv_results['fold_histories'].append(training_history)
         
-        # 全体の最良モデルを更新
-        if final_metrics['accuracy'] > best_overall_accuracy:
-            best_overall_accuracy = final_metrics['accuracy']
+        # 全体の最良モデルを更新（学習中の最良アキュラシーで比較）
+        if best_model_info['accuracy'] > best_overall_accuracy:
+            best_overall_accuracy = best_model_info['accuracy']
             best_overall_model = {
                 'model_state': best_model_info['model_state'],
-                'accuracy': final_metrics['accuracy'],
+                'accuracy': best_model_info['accuracy'],        # 学習中の最良アキュラシー
+                'test_accuracy': final_metrics['accuracy'],    # テストデータでの評価
                 'epoch': best_model_info['epoch'],
                 'model_name': best_model_info['model_name'],
                 'fold': fold + 1,
@@ -112,7 +114,8 @@ def run_cross_validation(config, id_to_image, labels, available_months):
             best_fold = fold + 1
         
         print(f"フォールド {fold + 1} 結果:")
-        print(f"  Accuracy: {final_metrics['accuracy']:.3f}")
+        print(f"  学習中最良Accuracy: {best_model_info['accuracy']:.3f} (Epoch {best_model_info['epoch']})")
+        print(f"  テスト最終Accuracy: {final_metrics['accuracy']:.3f}")
         print(f"  Precision: {final_metrics['precision']:.3f}")
         print(f"  Recall: {final_metrics['recall']:.3f}")
         if not np.isnan(final_metrics['auc']):
@@ -133,11 +136,11 @@ def run_cross_validation(config, id_to_image, labels, available_months):
     mean_auc = np.mean(cv_results['fold_aucs'])
     std_auc = np.std(cv_results['fold_aucs'])
     
-    print(f"Accuracy: {mean_accuracy:.3f} ± {std_accuracy:.3f}")
+    print(f"テストAccuracy: {mean_accuracy:.3f} ± {std_accuracy:.3f}")
     print(f"Precision: {mean_precision:.3f} ± {std_precision:.3f}")
     print(f"Recall: {mean_recall:.3f} ± {std_recall:.3f}")
     print(f"AUC: {mean_auc:.3f} ± {std_auc:.3f}")
-    print(f"最良フォールド: {best_fold} (Accuracy: {best_overall_accuracy:.3f})")
+    print(f"最良フォールド: {best_fold} (学習中最良Accuracy: {best_overall_accuracy:.3f})")
     
     # 統計情報を追加
     cv_results['mean_accuracy'] = mean_accuracy
@@ -284,7 +287,7 @@ def main():
             import pandas as pd
             cv_summary = pd.DataFrame({
                 'fold': range(1, config.n_folds + 1),
-                'accuracy': cv_results['fold_accuracies'],
+                'test_accuracy': cv_results['fold_accuracies'],
                 'precision': cv_results['fold_precisions'],
                 'recall': cv_results['fold_recalls'],
                 'auc': cv_results['fold_aucs'],
@@ -296,11 +299,11 @@ def main():
             
             # 保存されたモデルのサマリー
             print(f"\n=== 保存されたモデルのサマリー ===")
-            print(f"各フォールドのモデル:")
-            for i, (acc, path) in enumerate(zip(cv_results['fold_accuracies'], cv_results['fold_model_paths'])):
-                print(f"  フォールド {i+1}: Accuracy={acc:.3f}, Path={path}")
-            print(f"全体最良モデル:")
-            print(f"  フォールド {best_overall_model['fold']}: Accuracy={best_overall_model['accuracy']:.3f}")
+            print(f"各フォールドの最良モデル（学習中の最高アキュラシー）:")
+            for i, (test_acc, path) in enumerate(zip(cv_results['fold_accuracies'], cv_results['fold_model_paths'])):
+                print(f"  フォールド {i+1}: TestAccuracy={test_acc:.3f}, Path={path}")
+            print(f"全体最良モデル（学習中の最高アキュラシー）:")
+            print(f"  フォールド {best_overall_model['fold']}: TrainAccuracy={best_overall_model['accuracy']:.3f}, TestAccuracy={best_overall_model['test_accuracy']:.3f}")
             print(f"  Path={overall_best_path}")
             
         except Exception as e:
@@ -315,7 +318,8 @@ def main():
         # 最終評価結果表示
         print(f"\n=== 最終評価 ===")
         print(f"最良のモデルの最終評価結果:")
-        print(f"  Accuracy: {final_metrics['accuracy']:.3f}")
+        print(f"  学習中最良Accuracy: {best_model_info['accuracy']:.3f} (Epoch {best_model_info['epoch']})")
+        print(f"  テスト最終Accuracy: {final_metrics['accuracy']:.3f}")
         print(f"  Precision: {final_metrics['precision']:.3f}")
         print(f"  Recall: {final_metrics['recall']:.3f}")
         if not np.isnan(final_metrics['auc']):

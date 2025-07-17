@@ -229,7 +229,7 @@ def evaluate_model(model, test_loader, device):
     }
 
 def save_fold_model(fold_model_info, save_dir, fold_num):
-    """フォールドごとのモデルを保存"""
+    """フォールドごとの最良モデルを保存"""
     os.makedirs(save_dir, exist_ok=True)
     
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -242,27 +242,29 @@ def save_fold_model(fold_model_info, save_dir, fold_num):
     save_data = {
         'model_state_dict': fold_model_info['model_state'],
         'fold_number': fold_num,
-        'accuracy': fold_model_info['accuracy'],
+        'train_accuracy': fold_model_info['train_accuracy'],    # 学習中の最良アキュラシー
+        'test_accuracy': fold_model_info['test_accuracy'],      # テストデータでの評価
         'precision': fold_model_info['precision'],
         'recall': fold_model_info['recall'],
         'auc': fold_model_info['auc'],
-        'best_epoch': fold_model_info['epoch'],
+        'best_epoch': fold_model_info['best_epoch'],            # 最良アキュラシーを達成したエポック
         'model_name': fold_model_info['model_name'],
         'num_classes': 2,
         'final_metrics': fold_model_info['final_metrics'],
         'training_history': fold_model_info['training_history'],
-        'training_type': 'cross_validation_fold'
+        'training_type': 'cross_validation_fold',
+        'save_timestamp': timestamp
     }
     
     torch.save(save_data, fold_save_path)
     
-    print(f"フォールド {fold_num} のモデルを保存しました: {fold_save_path}")
-    print(f"  Accuracy: {fold_model_info['accuracy']:.3f}")
+    print(f"フォールド {fold_num} の最良モデルを保存しました: {fold_save_path}")
+    print(f"  学習中最良Accuracy: {fold_model_info['train_accuracy']:.3f} (Epoch {fold_model_info['best_epoch']})")
+    print(f"  テスト最終Accuracy: {fold_model_info['test_accuracy']:.3f}")
     print(f"  Precision: {fold_model_info['precision']:.3f}")
     print(f"  Recall: {fold_model_info['recall']:.3f}")
     auc_str = f"{fold_model_info['auc']:.3f}" if not np.isnan(fold_model_info['auc']) else "N/A"
     print(f"  AUC: {auc_str}")
-    print(f"  Best Epoch: {fold_model_info['epoch']}")
     
     return fold_save_path
 
