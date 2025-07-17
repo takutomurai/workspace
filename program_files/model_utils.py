@@ -1,5 +1,5 @@
 """
-モデル関連のユーティリティ
+モデル関連のユーティリティ - 交差検証対応版
 """
 import torch
 import torch.nn as nn
@@ -10,6 +10,7 @@ from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_a
 import numpy as np
 import datetime
 import os
+import warnings
 
 class DenseNetBinaryClassifier(nn.Module):
     """DenseNetを使用した二値分類器"""
@@ -138,11 +139,14 @@ def train_model(model, train_loader, test_loader, criterion, optimizer, schedule
         # 現在の学習率を取得
         current_lr = scheduler.get_last_lr()[0]
         
+        # AUCの表示（NaN値を考慮）
+        auc_str = f"{test_metrics['auc']:.3f}" if not np.isnan(test_metrics['auc']) else "N/A"
+        
         print(f"Epoch {epoch+1}/{num_epochs} - Loss: {avg_loss:.4f}, "
               f"Accuracy: {test_metrics['accuracy']:.3f}, "
               f"Precision: {test_metrics['precision']:.3f}, "
               f"Recall: {test_metrics['recall']:.3f}, "
-              f"AUC: {test_metrics['auc']:.3f}, "
+              f"AUC: {auc_str}, "
               f"LR: {current_lr:.6f}")
         
         # メモリ解放
@@ -189,12 +193,27 @@ def evaluate_model(model, test_loader, device):
             all_labels.extend(labels)
             all_probs.extend(probs_class1)
     
-    # 評価指標を計算
+    # 一意のクラスの数を確認
+    unique_labels = np.unique(all_labels)
+    unique_preds = np.unique(all_preds)
+    
+    # 評価指標を計算（エラーハンドリング付き）
     accuracy = accuracy_score(all_labels, all_preds)
-    precision = precision_score(all_labels, all_preds, zero_division=0)
-    recall = recall_score(all_labels, all_preds, zero_division=0)
-    auc = roc_auc_score(all_labels, all_probs)
-    cm = confusion_matrix(all_labels, all_preds)
+    
+    # precision, recall, AUCでは警告を抑制
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        precision = precision_score(all_labels, all_preds, zero_division=0)
+        recall = recall_score(all_labels, all_preds, zero_division=0)
+        
+        # AUCは両クラスが存在する場合のみ計算
+        if len(unique_labels) > 1:
+            auc = roc_auc_score(all_labels, all_probs)
+        else:
+            auc = float('nan')
+    
+    # 混同行列（両クラスのラベルを明示的に指定）
+    cm = confusion_matrix(all_labels, all_preds, labels=[0, 1])
     
     return {
         'accuracy': accuracy,
@@ -204,8 +223,48 @@ def evaluate_model(model, test_loader, device):
         'confusion_matrix': cm,
         'labels': all_labels,
         'predictions': all_preds,
-        'probabilities': all_probs
+        'probabilities': all_probs,
+        'unique_labels': unique_labels,
+        'unique_predictions': unique_preds
     }
+
+def save_fold_model(fold_model_info, save_dir, fold_num):
+    """フォールドごとのモデルを保存"""
+    os.makedirs(save_dir, exist_ok=True)
+    
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    model_name = fold_model_info['model_name'].lower()
+    
+    # フォールドモデルの保存パス
+    fold_save_path = os.path.join(save_dir, f'fold_{fold_num}_{model_name}_{timestamp}.pth')
+    
+    # 保存データ
+    save_data = {
+        'model_state_dict': fold_model_info['model_state'],
+        'fold_number': fold_num,
+        'accuracy': fold_model_info['accuracy'],
+        'precision': fold_model_info['precision'],
+        'recall': fold_model_info['recall'],
+        'auc': fold_model_info['auc'],
+        'best_epoch': fold_model_info['epoch'],
+        'model_name': fold_model_info['model_name'],
+        'num_classes': 2,
+        'final_metrics': fold_model_info['final_metrics'],
+        'training_history': fold_model_info['training_history'],
+        'training_type': 'cross_validation_fold'
+    }
+    
+    torch.save(save_data, fold_save_path)
+    
+    print(f"フォールド {fold_num} のモデルを保存しました: {fold_save_path}")
+    print(f"  Accuracy: {fold_model_info['accuracy']:.3f}")
+    print(f"  Precision: {fold_model_info['precision']:.3f}")
+    print(f"  Recall: {fold_model_info['recall']:.3f}")
+    auc_str = f"{fold_model_info['auc']:.3f}" if not np.isnan(fold_model_info['auc']) else "N/A"
+    print(f"  AUC: {auc_str}")
+    print(f"  Best Epoch: {fold_model_info['epoch']}")
+    
+    return fold_save_path
 
 def save_best_model(best_model_info, save_dir, training_history):
     """最良のモデルを保存"""
@@ -213,19 +272,71 @@ def save_best_model(best_model_info, save_dir, training_history):
     
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     model_name = best_model_info['model_name'].lower()
-    model_save_path = os.path.join(save_dir, f'best_{model_name}_{timestamp}.pth')
     
-    torch.save({
-        'model_state_dict': best_model_info['model_state'],
-        'best_accuracy': best_model_info['accuracy'],
-        'best_epoch': best_model_info['epoch'],
-        'model_name': best_model_info['model_name'],
-        'num_classes': 2,
-        'training_history': training_history
-    }, model_save_path)
+    # 交差検証の場合とそうでない場合で保存内容を変える
+    if isinstance(training_history, dict) and 'fold_accuracies' in training_history:
+        # 交差検証の場合
+        model_save_path = os.path.join(save_dir, f'best_overall_cv_{model_name}_{timestamp}.pth')
+        save_data = {
+            'model_state_dict': best_model_info['model_state'],
+            'best_accuracy': best_model_info['accuracy'],
+            'best_epoch': best_model_info['epoch'],
+            'best_fold': best_model_info['fold'],
+            'model_name': best_model_info['model_name'],
+            'num_classes': 2,
+            'cv_results': training_history,
+            'final_metrics': best_model_info['final_metrics'],
+            'training_history': best_model_info['training_history'],
+            'training_type': 'cross_validation_best_overall'
+        }
+        print(f"交差検証の全体最良モデルを保存しました: {model_save_path}")
+        print(f"最良のアキュラシー: {best_model_info['accuracy']:.3f}")
+        print(f"最良のフォールド: {best_model_info['fold']}")
+        print(f"エポック: {best_model_info['epoch']}")
+    else:
+        # 単一分割の場合
+        model_save_path = os.path.join(save_dir, f'best_{model_name}_{timestamp}.pth')
+        save_data = {
+            'model_state_dict': best_model_info['model_state'],
+            'best_accuracy': best_model_info['accuracy'],
+            'best_epoch': best_model_info['epoch'],
+            'model_name': best_model_info['model_name'],
+            'num_classes': 2,
+            'training_history': training_history,
+            'training_type': 'single_split'
+        }
+        print(f"最良のモデルを保存しました: {model_save_path}")
+        print(f"最良のアキュラシー: {best_model_info['accuracy']:.3f}")
+        print(f"エポック: {best_model_info['epoch']}")
     
-    print(f"最良のモデルを保存しました: {model_save_path}")
-    print(f"最良のアキュラシー: {best_model_info['accuracy']:.3f}")
-    print(f"エポック: {best_model_info['epoch']}")
-    
+    torch.save(save_data, model_save_path)
     return model_save_path
+
+def load_model(model_path, device):
+    """保存されたモデルを読み込み"""
+    checkpoint = torch.load(model_path, map_location=device)
+    
+    # モデルの種類を判定
+    model_name = checkpoint.get('model_name', 'DenseNet169')
+    if 'densenet121' in model_name.lower():
+        model_type = 'densenet121'
+    elif 'densenet201' in model_name.lower():
+        model_type = 'densenet201'
+    else:
+        model_type = 'densenet169'
+    
+    # モデルを作成
+    model = DenseNetBinaryClassifier(model_type, checkpoint.get('num_classes', 2))
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model = model.to(device)
+    
+    print(f"モデルを読み込みました: {model_path}")
+    print(f"モデル種類: {model_name}")
+    print(f"学習タイプ: {checkpoint.get('training_type', 'unknown')}")
+    
+    if 'fold_number' in checkpoint:
+        print(f"フォールド番号: {checkpoint['fold_number']}")
+    if 'best_fold' in checkpoint:
+        print(f"最良フォールド: {checkpoint['best_fold']}")
+    
+    return model, checkpoint
