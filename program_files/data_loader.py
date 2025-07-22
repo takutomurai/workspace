@@ -176,11 +176,11 @@ def create_transform(image_dir):
     """画像変換を作成"""
     #max_width, max_height = get_max_image_size(image_dir)
     max_width = 183
-    max_height = 431
-    print(f"最大画像サイズ: {max_width} x {max_height}")
+    max_height = 300
+    print(f"最大画像サイズ: {max_height} x {max_width}")
     
     transform = transforms.Compose([
-        transforms.Resize((max_width, max_height)),
+        transforms.Resize((max_height, max_width)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])

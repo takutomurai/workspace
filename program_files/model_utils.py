@@ -1,12 +1,12 @@
 """
-モデル関連のユーティリティ - 交差検証対応版
+モデル関連のユーティリティ - 交差検証対応版（PR-AUC対応）
 """
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torchvision.models as models
 from torch.cuda.amp import GradScaler, autocast
-from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score, confusion_matrix
+from sklearn.metrics import accuracy_score, precision_score, recall_score, roc_auc_score, confusion_matrix, average_precision_score
 import numpy as np
 import datetime
 import os
@@ -69,6 +69,7 @@ def train_model(model, train_loader, test_loader, criterion, optimizer, schedule
     test_precisions = []
     test_recalls = []
     test_aucs = []
+    test_pr_aucs = []  # PR-AUCを追加
     
     # 最良のモデル保存用
     best_accuracy = 0.0
@@ -128,6 +129,7 @@ def train_model(model, train_loader, test_loader, criterion, optimizer, schedule
         test_precisions.append(test_metrics['precision'])
         test_recalls.append(test_metrics['recall'])
         test_aucs.append(test_metrics['auc'])
+        test_pr_aucs.append(test_metrics['pr_auc'])  # PR-AUCを追加
         
         # 最良のモデルを保存
         if test_metrics['accuracy'] > best_accuracy:
@@ -139,14 +141,16 @@ def train_model(model, train_loader, test_loader, criterion, optimizer, schedule
         # 現在の学習率を取得
         current_lr = scheduler.get_last_lr()[0]
         
-        # AUCの表示（NaN値を考慮）
+        # AUCとPR-AUCの表示（NaN値を考慮）
         auc_str = f"{test_metrics['auc']:.3f}" if not np.isnan(test_metrics['auc']) else "N/A"
+        pr_auc_str = f"{test_metrics['pr_auc']:.3f}" if not np.isnan(test_metrics['pr_auc']) else "N/A"
         
         print(f"Epoch {epoch+1}/{num_epochs} - Loss: {avg_loss:.4f}, "
               f"Accuracy: {test_metrics['accuracy']:.3f}, "
               f"Precision: {test_metrics['precision']:.3f}, "
               f"Recall: {test_metrics['recall']:.3f}, "
-              f"AUC: {auc_str}, "
+              f"ROC-AUC: {auc_str}, "
+              f"PR-AUC: {pr_auc_str}, "
               f"LR: {current_lr:.6f}")
         
         # メモリ解放
@@ -158,7 +162,8 @@ def train_model(model, train_loader, test_loader, criterion, optimizer, schedule
         'test_accuracies': test_accuracies,
         'test_precisions': test_precisions,
         'test_recalls': test_recalls,
-        'test_aucs': test_aucs
+        'test_aucs': test_aucs,
+        'test_pr_aucs': test_pr_aucs  # PR-AUCを追加
     }
     
     # 最良のモデル情報
@@ -172,7 +177,7 @@ def train_model(model, train_loader, test_loader, criterion, optimizer, schedule
     return training_history, best_model_info
 
 def evaluate_model(model, test_loader, device):
-    """モデルを評価"""
+    """モデルを評価（PR-AUC対応）"""
     model.eval()
     all_preds = []
     all_labels = []
@@ -200,17 +205,19 @@ def evaluate_model(model, test_loader, device):
     # 評価指標を計算（エラーハンドリング付き）
     accuracy = accuracy_score(all_labels, all_preds)
     
-    # precision, recall, AUCでは警告を抑制
+    # precision, recall, AUC, PR-AUCでは警告を抑制
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         precision = precision_score(all_labels, all_preds, zero_division=0)
         recall = recall_score(all_labels, all_preds, zero_division=0)
         
-        # AUCは両クラスが存在する場合のみ計算
+        # ROC-AUCは両クラスが存在する場合のみ計算
         if len(unique_labels) > 1:
             auc = roc_auc_score(all_labels, all_probs)
+            pr_auc = average_precision_score(all_labels, all_probs)
         else:
             auc = float('nan')
+            pr_auc = float('nan')
     
     # 混同行列（両クラスのラベルを明示的に指定）
     cm = confusion_matrix(all_labels, all_preds, labels=[0, 1])
@@ -220,6 +227,7 @@ def evaluate_model(model, test_loader, device):
         'precision': precision,
         'recall': recall,
         'auc': auc,
+        'pr_auc': pr_auc,  # PR-AUCを追加
         'confusion_matrix': cm,
         'labels': all_labels,
         'predictions': all_preds,
@@ -242,12 +250,13 @@ def save_fold_model(fold_model_info, save_dir, fold_num):
     save_data = {
         'model_state_dict': fold_model_info['model_state'],
         'fold_number': fold_num,
-        'train_accuracy': fold_model_info['train_accuracy'],    # 学習中の最良アキュラシー
-        'test_accuracy': fold_model_info['test_accuracy'],      # テストデータでの評価
+        'train_accuracy': fold_model_info['train_accuracy'],
+        'test_accuracy': fold_model_info['test_accuracy'],
         'precision': fold_model_info['precision'],
         'recall': fold_model_info['recall'],
         'auc': fold_model_info['auc'],
-        'best_epoch': fold_model_info['best_epoch'],            # 最良アキュラシーを達成したエポック
+        'pr_auc': fold_model_info['pr_auc'],  # PR-AUCを追加
+        'best_epoch': fold_model_info['best_epoch'],
         'model_name': fold_model_info['model_name'],
         'num_classes': 2,
         'final_metrics': fold_model_info['final_metrics'],
@@ -264,7 +273,9 @@ def save_fold_model(fold_model_info, save_dir, fold_num):
     print(f"  Precision: {fold_model_info['precision']:.3f}")
     print(f"  Recall: {fold_model_info['recall']:.3f}")
     auc_str = f"{fold_model_info['auc']:.3f}" if not np.isnan(fold_model_info['auc']) else "N/A"
-    print(f"  AUC: {auc_str}")
+    pr_auc_str = f"{fold_model_info['pr_auc']:.3f}" if not np.isnan(fold_model_info['pr_auc']) else "N/A"
+    print(f"  ROC-AUC: {auc_str}")
+    print(f"  PR-AUC: {pr_auc_str}")
     
     return fold_save_path
 

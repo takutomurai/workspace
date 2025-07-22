@@ -1,5 +1,5 @@
 """
-メインファイル - DenseNetを使用した医療画像分類（交差検証対応）
+メインファイル - DenseNetを使用した医療画像分類（交差検証対応・PR-AUC対応）
 """
 import os
 import warnings
@@ -7,11 +7,11 @@ import numpy as np
 from sklearn.model_selection import StratifiedKFold
 from data_loader import load_and_merge_csv_data, create_image_mappings, create_datasets, create_datasets_for_cv
 from model_utils import create_densenet_model, train_model, evaluate_model, save_best_model, save_fold_model
-from visualization import plot_training_curves, save_results, plot_confusion_matrix, plot_roc_curve, plot_cv_results
+from visualization import plot_training_curves, save_results, plot_confusion_matrix, plot_roc_curve, plot_pr_curve, plot_cv_results
 from Config import Config
 
 def run_cross_validation(config, id_to_image, labels, available_months):
-    """交差検証を実行"""
+    """交差検証を実行（PR-AUC対応）"""
     print(f"\n=== {config.n_folds}分割交差検証開始 ===")
     
     # データの準備
@@ -27,9 +27,10 @@ def run_cross_validation(config, id_to_image, labels, available_months):
         'fold_precisions': [],
         'fold_recalls': [],
         'fold_aucs': [],
+        'fold_pr_aucs': [],  # PR-AUCを追加
         'fold_best_epochs': [],
         'fold_histories': [],
-        'fold_model_paths': []  # 各フォールドのモデル保存パスを追加
+        'fold_model_paths': []
     }
     
     best_overall_accuracy = 0.0
@@ -73,13 +74,14 @@ def run_cross_validation(config, id_to_image, labels, available_months):
         
         # フォールドごとのモデル保存（学習中の最良モデルを保存）
         fold_model_info = {
-            'model_state': best_model_info['model_state'],  # 学習中の最良モデル状態
-            'train_accuracy': best_model_info['accuracy'],   # 学習中の最良アキュラシー
-            'test_accuracy': final_metrics['accuracy'],      # テストデータでの最終評価
+            'model_state': best_model_info['model_state'],
+            'train_accuracy': best_model_info['accuracy'],
+            'test_accuracy': final_metrics['accuracy'],
             'precision': final_metrics['precision'],
             'recall': final_metrics['recall'],
             'auc': final_metrics['auc'] if not np.isnan(final_metrics['auc']) else 0.0,
-            'best_epoch': best_model_info['epoch'],          # 最良アキュラシーを達成したエポック
+            'pr_auc': final_metrics['pr_auc'] if not np.isnan(final_metrics['pr_auc']) else 0.0,  # PR-AUCを追加
+            'best_epoch': best_model_info['epoch'],
             'model_name': best_model_info['model_name'],
             'fold': fold + 1,
             'final_metrics': final_metrics,
@@ -95,6 +97,7 @@ def run_cross_validation(config, id_to_image, labels, available_months):
         cv_results['fold_precisions'].append(final_metrics['precision'])
         cv_results['fold_recalls'].append(final_metrics['recall'])
         cv_results['fold_aucs'].append(final_metrics['auc'] if not np.isnan(final_metrics['auc']) else 0.0)
+        cv_results['fold_pr_aucs'].append(final_metrics['pr_auc'] if not np.isnan(final_metrics['pr_auc']) else 0.0)  # PR-AUCを追加
         cv_results['fold_best_epochs'].append(best_model_info['epoch'])
         cv_results['fold_histories'].append(training_history)
         
@@ -103,8 +106,8 @@ def run_cross_validation(config, id_to_image, labels, available_months):
             best_overall_accuracy = best_model_info['accuracy']
             best_overall_model = {
                 'model_state': best_model_info['model_state'],
-                'accuracy': best_model_info['accuracy'],        # 学習中の最良アキュラシー
-                'test_accuracy': final_metrics['accuracy'],    # テストデータでの評価
+                'accuracy': best_model_info['accuracy'],
+                'test_accuracy': final_metrics['accuracy'],
                 'epoch': best_model_info['epoch'],
                 'model_name': best_model_info['model_name'],
                 'fold': fold + 1,
@@ -119,9 +122,13 @@ def run_cross_validation(config, id_to_image, labels, available_months):
         print(f"  Precision: {final_metrics['precision']:.3f}")
         print(f"  Recall: {final_metrics['recall']:.3f}")
         if not np.isnan(final_metrics['auc']):
-            print(f"  AUC: {final_metrics['auc']:.3f}")
+            print(f"  ROC-AUC: {final_metrics['auc']:.3f}")
         else:
-            print(f"  AUC: N/A (単一クラス)")
+            print(f"  ROC-AUC: N/A (単一クラス)")
+        if not np.isnan(final_metrics['pr_auc']):
+            print(f"  PR-AUC: {final_metrics['pr_auc']:.3f}")
+        else:
+            print(f"  PR-AUC: N/A (単一クラス)")
         print(f"  Best Epoch: {best_model_info['epoch']}")
         print(f"  Model saved: {fold_model_path}")
     
@@ -135,11 +142,14 @@ def run_cross_validation(config, id_to_image, labels, available_months):
     std_recall = np.std(cv_results['fold_recalls'])
     mean_auc = np.mean(cv_results['fold_aucs'])
     std_auc = np.std(cv_results['fold_aucs'])
+    mean_pr_auc = np.mean(cv_results['fold_pr_aucs'])  # PR-AUCを追加
+    std_pr_auc = np.std(cv_results['fold_pr_aucs'])    # PR-AUCを追加
     
     print(f"テストAccuracy: {mean_accuracy:.3f} ± {std_accuracy:.3f}")
     print(f"Precision: {mean_precision:.3f} ± {std_precision:.3f}")
     print(f"Recall: {mean_recall:.3f} ± {std_recall:.3f}")
-    print(f"AUC: {mean_auc:.3f} ± {std_auc:.3f}")
+    print(f"ROC-AUC: {mean_auc:.3f} ± {std_auc:.3f}")
+    print(f"PR-AUC: {mean_pr_auc:.3f} ± {std_pr_auc:.3f}")
     print(f"最良フォールド: {best_fold} (学習中最良Accuracy: {best_overall_accuracy:.3f})")
     
     # 統計情報を追加
@@ -151,6 +161,8 @@ def run_cross_validation(config, id_to_image, labels, available_months):
     cv_results['std_recall'] = std_recall
     cv_results['mean_auc'] = mean_auc
     cv_results['std_auc'] = std_auc
+    cv_results['mean_pr_auc'] = mean_pr_auc  # PR-AUCを追加
+    cv_results['std_pr_auc'] = std_pr_auc    # PR-AUCを追加
     cv_results['best_fold'] = best_fold
     
     return cv_results, best_overall_model
@@ -273,6 +285,9 @@ def main():
                 plot_roc_curve(best_overall_model['final_metrics']['labels'], 
                               best_overall_model['final_metrics']['probabilities'],
                               best_overall_model['model_name'], config.output_dir)
+                plot_pr_curve(best_overall_model['final_metrics']['labels'], 
+                             best_overall_model['final_metrics']['probabilities'],
+                             best_overall_model['model_name'], config.output_dir)  # PR曲線を追加
         except Exception as e:
             print(f"可視化エラー: {str(e)}")
         
@@ -290,7 +305,8 @@ def main():
                 'test_accuracy': cv_results['fold_accuracies'],
                 'precision': cv_results['fold_precisions'],
                 'recall': cv_results['fold_recalls'],
-                'auc': cv_results['fold_aucs'],
+                'roc_auc': cv_results['fold_aucs'],
+                'pr_auc': cv_results['fold_pr_aucs'],  # PR-AUCを追加
                 'best_epoch': cv_results['fold_best_epochs'],
                 'model_path': cv_results['fold_model_paths']
             })
@@ -323,9 +339,13 @@ def main():
         print(f"  Precision: {final_metrics['precision']:.3f}")
         print(f"  Recall: {final_metrics['recall']:.3f}")
         if not np.isnan(final_metrics['auc']):
-            print(f"  AUC: {final_metrics['auc']:.3f}")
+            print(f"  ROC-AUC: {final_metrics['auc']:.3f}")
         else:
-            print(f"  AUC: N/A (単一クラス)")
+            print(f"  ROC-AUC: N/A (単一クラス)")
+        if not np.isnan(final_metrics['pr_auc']):
+            print(f"  PR-AUC: {final_metrics['pr_auc']:.3f}")
+        else:
+            print(f"  PR-AUC: N/A (単一クラス)")
         print("Confusion Matrix:")
         print(final_metrics['confusion_matrix'])
         
@@ -336,6 +356,8 @@ def main():
                                  best_model_info['model_name'], config.output_dir)
             plot_roc_curve(final_metrics['labels'], final_metrics['probabilities'],
                           best_model_info['model_name'], config.output_dir)
+            plot_pr_curve(final_metrics['labels'], final_metrics['probabilities'],
+                         best_model_info['model_name'], config.output_dir)  # PR曲線を追加
         except Exception as e:
             print(f"可視化エラー: {str(e)}")
         
